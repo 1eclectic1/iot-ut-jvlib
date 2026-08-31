@@ -16,7 +16,12 @@
 #include <credentials.h>
 
 #include <Wire.h>
+#ifdef ESP32
+  #include <esp_mac.h>
+#endif
 #include <stdarg.h>
+#include <strings.h>
+#include <functional>
 
 void jvSensorsBegin();  // defined in jv_sensors.cpp (global)
 
@@ -37,6 +42,46 @@ namespace jv_internal {
   String resetReasonStr;
 
   bool mqttWasConnected = false;
+
+  // Remote MQTT logging (default off; enable via control topic)
+  bool mqttLogEnabled = false;
+  LogLevel mqttLogLevel = LOG_WARN;
+  std::function<void(char*, uint8_t*, unsigned int)> userCallback;
+  bool inMqttLogPublish = false;  // prevent recursion
+
+  String logTopic() {
+    return String(LWT_BASE_TOPIC) + "/" + deviceIdStr + "/log";
+  }
+  String logControlTopic() {
+    return String(LWT_BASE_TOPIC) + "/" + deviceIdStr + "/log/control";
+  }
+
+  void handleLogControl(char* topic, byte* payload, unsigned int length) {
+    if (strcmp(topic, logControlTopic().c_str()) != 0) return;
+    StaticJsonDocument<192> doc;
+    if (deserializeJson(doc, payload, length)) return;
+
+    if (doc.containsKey("enable")) {
+      mqttLogEnabled = doc["enable"] | false;
+    }
+    if (doc.containsKey("level")) {
+      const char* lv = doc["level"] | "WARN";
+      if (!strcasecmp(lv, "ERROR")) mqttLogLevel = LOG_ERROR;
+      else if (!strcasecmp(lv, "WARN")) mqttLogLevel = LOG_WARN;
+      else if (!strcasecmp(lv, "INFO")) mqttLogLevel = LOG_INFO;
+      else if (!strcasecmp(lv, "DEBUG")) mqttLogLevel = LOG_DEBUG;
+    }
+    // Serial only here — avoid MQTT log recursion
+    Serial.printf("[jvlib] MQTT log %s level=%d\n",
+                  mqttLogEnabled ? "ON" : "OFF", (int)mqttLogLevel);
+  }
+
+  void mqttDispatch(char* topic, byte* payload, unsigned int length) {
+    handleLogControl(topic, payload, length);
+    if (userCallback) {
+      userCallback(topic, payload, length);
+    }
+  }
 
   // Topics the sketch has asked us to (re)subscribe after reconnect
   static const int MAX_SUBS = 8;
@@ -97,6 +142,8 @@ namespace jv_internal {
       LOG_INFO("MQTT connected");
       mqtt.setBufferSize(1024);
       publishStatus(true);
+      // Always subscribe log control (default logging still off until enabled)
+      mqtt.subscribe(logControlTopic().c_str(), 0);
       resubscribe();
       mqttWasConnected = true;
     } else {
@@ -138,11 +185,31 @@ void jvLog(LogLevel level, const char* file, int line, const char* format, ...) 
 
   Serial.println(buf);
   Serial.flush();
+
+  // Optional MQTT log (enabled remotely; never retained)
+  if (jv_internal::mqttLogEnabled
+      && level <= jv_internal::mqttLogLevel
+      && jv_internal::mqtt.connected()
+      && !jv_internal::inMqttLogPublish) {
+    jv_internal::inMqttLogPublish = true;
+    StaticJsonDocument<384> doc;
+    doc["id"] = jv_internal::deviceIdStr;
+    doc["lvl"] = (level == LOG_ERROR) ? "ERROR" :
+                 (level == LOG_WARN)  ? "WARN"  :
+                 (level == LOG_INFO)  ? "INFO"  : "DEBUG";
+    doc["msg"] = buf;
+    char out[384];
+    serializeJson(doc, out, sizeof(out));
+    jv_internal::mqtt.publish(jv_internal::logTopic().c_str(), out, false);
+    jv_internal::inMqttLogPublish = false;
+  }
 }
 
 // -----------------------------------------------------------------------------
 // WiFi
 // -----------------------------------------------------------------------------
+static void buildDeviceId();
+
 static bool connectWifi(unsigned long timeoutMs = 45000) {
   if (WiFi.status() == WL_CONNECTED) {
     jv_internal::currentRssi = WiFi.RSSI();
@@ -166,6 +233,12 @@ static bool connectWifi(unsigned long timeoutMs = 45000) {
   if (WiFi.status() == WL_CONNECTED) {
     jv_internal::currentRssi = WiFi.RSSI();
     jv_internal::myIp = WiFi.localIP().toString();
+    // Re-read MAC after radio is up if we still have a zero id
+    if (jv_internal::deviceIdStr.endsWith("-000000000000") ||
+        jv_internal::deviceIdStr.endsWith("-000000001500")) {
+      buildDeviceId();
+      LOG_INFO("Device ID refreshed: %s", jv_internal::deviceIdStr.c_str());
+    }
     LOG_INFO("WiFi OK  IP=%s  RSSI=%ld", jv_internal::myIp.c_str(), jv_internal::currentRssi);
     return true;
   }
@@ -175,8 +248,28 @@ static bool connectWifi(unsigned long timeoutMs = 45000) {
 }
 
 static void buildDeviceId() {
-  uint8_t mac[6];
+  // MAC is often zeros on ESP32-C3 if WiFi STA mode has not been set yet
+  WiFi.mode(WIFI_STA);
+  delay(20);
+
+  uint8_t mac[6] = {0,0,0,0,0,0};
+#ifdef ESP32
+  // eFuse/base MAC — reliable before WiFi.begin()
+  if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
+    WiFi.macAddress(mac);
+  }
+#else
   WiFi.macAddress(mac);
+#endif
+
+  bool allZero = true;
+  for (int i = 0; i < 6; i++) {
+    if (mac[i] != 0) { allZero = false; break; }
+  }
+  if (allZero) {
+    WiFi.macAddress(mac);
+  }
+
   char macStr[13];
   sprintf(macStr, "%02X%02X%02X%02X%02X%02X",
           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
@@ -234,6 +327,13 @@ void begin() {
 #endif
 
   jv_internal::mqtt.setServer(mqtt_server, 1883);
+  jv_internal::mqtt.setCallback(jv_internal::mqttDispatch);
+#ifdef JV_MQTT_LOG_DEFAULT_ON
+  jv_internal::mqttLogEnabled = true;
+#endif
+#ifdef JV_MQTT_LOG_DEFAULT_LEVEL
+  jv_internal::mqttLogLevel = (LogLevel)JV_MQTT_LOG_DEFAULT_LEVEL;
+#endif
   jv_internal::ensureMqtt();
   // Sensor init: call jvSensorsBegin() from sketch after jv::begin()
 
@@ -265,7 +365,8 @@ void loop() {
 // ----- MQTT helpers -----
 
 void setCallback(MQTT_CALLBACK_SIGNATURE) {
-  jv_internal::mqtt.setCallback(callback);
+  jv_internal::userCallback = callback;
+  jv_internal::mqtt.setCallback(jv_internal::mqttDispatch);
 }
 
 bool subscribe(const char* topic, uint8_t qos) {

@@ -36,6 +36,13 @@
 //
 // =============================================================================
 
+// MQTT remote logging (optional):
+//   Publish to sensors/<deviceId>/log/control
+//     {"enable":true,"level":"INFO"}  or  {"enable":false}
+//   Logs appear on sensors/<deviceId>/log  (not retained, not for Influx)
+//   Default: off. Override: #define JV_MQTT_LOG_DEFAULT_ON
+//            #define JV_MQTT_LOG_DEFAULT_LEVEL LOG_INFO
+
 #include <Arduino.h>
 #include <PubSubClient.h>   // needed for MQTT_CALLBACK_SIGNATURE
 
@@ -43,7 +50,7 @@
 // Version
 // -----------------------------------------------------------------------------
 #ifndef JVLIB_VERSION
-#define JVLIB_VERSION "2026.08.30"
+#define JVLIB_VERSION "2026.08.31b"
 
 #ifndef JV_ALTITUDE_M
 #define JV_ALTITUDE_M 0.0
