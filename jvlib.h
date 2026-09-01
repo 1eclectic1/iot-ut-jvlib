@@ -50,7 +50,7 @@
 // Version
 // -----------------------------------------------------------------------------
 #ifndef JVLIB_VERSION
-#define JVLIB_VERSION "2026.08.31b"
+#define JVLIB_VERSION "2026.09.01c"
 
 #ifndef JV_ALTITUDE_M
 #define JV_ALTITUDE_M 0.0
@@ -60,6 +60,9 @@
 #endif
 #ifndef JV_OUTDOOR_TEMP_TIMEOUT_MS
 #define JV_OUTDOOR_TEMP_TIMEOUT_MS 300000UL
+#endif
+#ifndef JV_TIMEZONE
+#define JV_TIMEZONE "America/New_York"
 #endif
 
 #endif

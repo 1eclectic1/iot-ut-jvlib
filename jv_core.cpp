@@ -93,8 +93,20 @@ namespace jv_internal {
     return String(LWT_BASE_TOPIC) + "/" + deviceIdStr + "/status";
   }
 
+  void refreshNetworkInfo() {
+    if (WiFi.status() == WL_CONNECTED) {
+      currentRssi = WiFi.RSSI();
+      IPAddress lip = WiFi.localIP();
+      if (lip[0] != 0) {
+        myIp = lip.toString();
+      }
+    }
+  }
+
   void publishStatus(bool online) {
     if (!mqtt.connected()) return;
+
+    refreshNetworkInfo();
 
     StaticJsonDocument<256> doc;
     doc["id"]     = deviceIdStr;
@@ -103,7 +115,11 @@ namespace jv_internal {
     doc["rssi"]   = currentRssi;
     doc["ver"]    = combinedVersion;
     doc["ts"]     = myTZ.dateTime(ISO8601);
-    if (resetReasonStr.length()) doc["reset"] = resetReasonStr;
+    if (resetReasonStr.length()) {
+      doc["reset"] = resetReasonStr;
+      // Always present on retained status so reboot history is available
+      // even when MQTT logging is disabled
+    }
 
     char buf[256];
     serializeJson(doc, buf, sizeof(buf));
@@ -142,6 +158,18 @@ namespace jv_internal {
       LOG_INFO("MQTT connected");
       mqtt.setBufferSize(1024);
       publishStatus(true);
+      // Retained boot/reboot record (independent of MQTT log enable)
+      {
+        StaticJsonDocument<192> boot;
+        boot["id"] = deviceIdStr;
+        boot["reset"] = resetReasonStr;
+        boot["ver"] = combinedVersion;
+        boot["ts"] = myTZ.dateTime(ISO8601);
+        char bbuf[192];
+        serializeJson(boot, bbuf, sizeof(bbuf));
+        String bootTopic = String(LWT_BASE_TOPIC) + "/" + deviceIdStr + "/boot";
+        mqtt.publish(bootTopic.c_str(), bbuf, true);  // retained
+      }
       // Always subscribe log control (default logging still off until enabled)
       mqtt.subscribe(logControlTopic().c_str(), 0);
       resubscribe();
@@ -156,7 +184,10 @@ namespace jv_internal {
 // Public accessors
 namespace jv {
   const String& deviceId() { return jv_internal::deviceIdStr; }
-  const String& ip()       { return jv_internal::myIp; }
+  const String& ip() {
+    jv_internal::refreshNetworkInfo();
+    return jv_internal::myIp;
+  }
   long          rssi()     { return jv_internal::currentRssi; }
   const String& version()  { return jv_internal::combinedVersion; }
 }
@@ -316,10 +347,17 @@ void begin() {
   buildDeviceId();
   LOG_INFO("Device ID: %s", jv_internal::deviceIdStr.c_str());
 
-  jv_internal::myTZ.setLocation(F("America/New_York"));
-
   connectWifi();
-  waitForSync();
+
+  // NTP first, then timezone (setLocation before sync leaves you on UTC)
+  waitForSync(10);  // seconds
+  if (!jv_internal::myTZ.setLocation(F(JV_TIMEZONE))) {
+    LOG_WARN("setLocation failed — using POSIX EST5EDT");
+    jv_internal::myTZ.setPosix(F("EST5EDT,M3.2.0,M11.1.0"));
+  }
+  LOG_INFO("Local time: %s (offset %d min)",
+           jv_internal::myTZ.dateTime("Y-m-d H:i:s").c_str(),
+           jv_internal::myTZ.getOffset());
 
   // Only start I2C if something that needs it is compiled in
 #if defined(BME) || defined(BMP) || (i2cdata >= 0)
@@ -348,7 +386,7 @@ void loop() {
       connectWifi(12000);
     }
   } else {
-    jv_internal::currentRssi = WiFi.RSSI();
+    jv_internal::refreshNetworkInfo();
   }
 
   if (!jv_internal::mqtt.connected()) {
@@ -359,6 +397,13 @@ void loop() {
     }
   } else {
     jv_internal::mqtt.loop();
+
+    // One-shot: if we published status before IP was known, refresh retained status
+    static bool statusIpFilled = false;
+    if (!statusIpFilled && jv_internal::myIp.length() > 0) {
+      jv_internal::publishStatus(true);
+      statusIpFilled = true;
+    }
   }
 }
 

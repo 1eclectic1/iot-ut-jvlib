@@ -63,3 +63,7 @@
 #ifndef JV_OUTDOOR_TEMP_TIMEOUT_MS
 #define JV_OUTDOOR_TEMP_TIMEOUT_MS 300000UL
 #endif
+
+#ifndef JV_TIMEZONE
+#define JV_TIMEZONE "America/New_York"
+#endif

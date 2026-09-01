@@ -15,20 +15,23 @@
 
 namespace {
   bool dailyRebootEnabled = false;
-  int  lastRebootDay      = -1;   // day-of-year already handled
+  int  lastRebootDay      = -1;
 }
 
 void jvDailyRebootSetup() {
   dailyRebootEnabled = true;
   lastRebootDay = -1;
 
-  // If time is already valid and we're past today's reboot hour,
-  // mark today done so a mid-day boot doesn't reboot immediately.
   if (timeStatus() == timeSet) {
     int h = jv_internal::myTZ.hour();
+    int d = jv_internal::myTZ.dayOfYear();
+    LOG_INFO("Local time now %02d:%02d dayOfYear=%d", h, jv_internal::myTZ.minute(), d);
+    // Already past today's reboot hour → mark done (avoid immediate reboot)
     if (h > JV_REBOOT_HOUR) {
-      lastRebootDay = jv_internal::myTZ.dayOfYear();
+      lastRebootDay = d;
     }
+  } else {
+    LOG_WARN("Time not set yet; daily reboot will arm after NTP sync");
   }
 
   LOG_INFO("Daily reboot enabled at %02d:00 local time", JV_REBOOT_HOUR);
@@ -43,17 +46,15 @@ void jvCheckDailyReboot() {
 
   if (currentDay == lastRebootDay) return;
 
-  // Past today's window → mark done, do not reboot
   if (currentHour > JV_REBOOT_HOUR) {
     lastRebootDay = currentDay;
     return;
   }
 
-  // In the target hour (03:00–03:59) → reboot once
   if (currentHour == JV_REBOOT_HOUR) {
     lastRebootDay = currentDay;
-    LOG_INFO("Daily reboot triggered (hour=%d dayOfYear=%d)", currentHour, currentDay);
-    delay(300);
+    LOG_INFO("Daily reboot triggered (local hour=%d dayOfYear=%d)", currentHour, currentDay);
+    delay(500);
     ESP.restart();
   }
 }
