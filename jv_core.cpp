@@ -103,6 +103,25 @@ namespace jv_internal {
     }
   }
 
+  bool timeValid() {
+    return timeStatus() == timeSet;
+  }
+
+  void publishBootRecord() {
+    if (!mqtt.connected()) return;
+    StaticJsonDocument<192> boot;
+    boot["id"] = deviceIdStr;
+    boot["reset"] = resetReasonStr;
+    boot["ver"] = combinedVersion;
+    if (timeValid()) {
+      boot["ts"] = myTZ.dateTime(ISO8601);
+    }
+    char bbuf[192];
+    serializeJson(boot, bbuf, sizeof(bbuf));
+    String bootTopic = String(LWT_BASE_TOPIC) + "/" + deviceIdStr + "/boot";
+    mqtt.publish(bootTopic.c_str(), bbuf, true);
+  }
+
   void publishStatus(bool online) {
     if (!mqtt.connected()) return;
 
@@ -114,11 +133,11 @@ namespace jv_internal {
     doc["ip"]     = myIp;
     doc["rssi"]   = currentRssi;
     doc["ver"]    = combinedVersion;
-    doc["ts"]     = myTZ.dateTime(ISO8601);
+    if (timeValid()) {
+      doc["ts"] = myTZ.dateTime(ISO8601);
+    }
     if (resetReasonStr.length()) {
       doc["reset"] = resetReasonStr;
-      // Always present on retained status so reboot history is available
-      // even when MQTT logging is disabled
     }
 
     char buf[256];
@@ -158,18 +177,7 @@ namespace jv_internal {
       LOG_INFO("MQTT connected");
       mqtt.setBufferSize(1024);
       publishStatus(true);
-      // Retained boot/reboot record (independent of MQTT log enable)
-      {
-        StaticJsonDocument<192> boot;
-        boot["id"] = deviceIdStr;
-        boot["reset"] = resetReasonStr;
-        boot["ver"] = combinedVersion;
-        boot["ts"] = myTZ.dateTime(ISO8601);
-        char bbuf[192];
-        serializeJson(boot, bbuf, sizeof(bbuf));
-        String bootTopic = String(LWT_BASE_TOPIC) + "/" + deviceIdStr + "/boot";
-        mqtt.publish(bootTopic.c_str(), bbuf, true);  // retained
-      }
+      publishBootRecord();
       // Always subscribe log control (default logging still off until enabled)
       mqtt.subscribe(logControlTopic().c_str(), 0);
       resubscribe();
@@ -350,14 +358,20 @@ void begin() {
   connectWifi();
 
   // NTP first, then timezone (setLocation before sync leaves you on UTC)
-  waitForSync(10);  // seconds
+  LOG_INFO("Waiting for NTP...");
+  waitForSync(20);  // seconds
+  if (timeStatus() != timeSet) {
+    LOG_WARN("NTP not ready after wait — will retry in loop()");
+  }
   if (!jv_internal::myTZ.setLocation(F(JV_TIMEZONE))) {
     LOG_WARN("setLocation failed — using POSIX EST5EDT");
     jv_internal::myTZ.setPosix(F("EST5EDT,M3.2.0,M11.1.0"));
   }
-  LOG_INFO("Local time: %s (offset %d min)",
-           jv_internal::myTZ.dateTime("Y-m-d H:i:s").c_str(),
-           jv_internal::myTZ.getOffset());
+  if (timeStatus() == timeSet) {
+    LOG_INFO("Local time: %s (offset %d min)",
+             jv_internal::myTZ.dateTime("Y-m-d H:i:s").c_str(),
+             jv_internal::myTZ.getOffset());
+  }
 
   // Only start I2C if something that needs it is compiled in
 #if defined(BME) || defined(BMP) || (i2cdata >= 0)
@@ -398,11 +412,15 @@ void loop() {
   } else {
     jv_internal::mqtt.loop();
 
-    // One-shot: if we published status before IP was known, refresh retained status
-    static bool statusIpFilled = false;
-    if (!statusIpFilled && jv_internal::myIp.length() > 0) {
+    // One-shot: refresh retained status/boot once IP and/or time are good
+    static bool statusFullyPublished = false;
+    static bool sawTime = false;
+    if (jv_internal::timeValid()) sawTime = true;
+    if (!statusFullyPublished && jv_internal::myIp.length() > 0 && sawTime) {
       jv_internal::publishStatus(true);
-      statusIpFilled = true;
+      jv_internal::publishBootRecord();
+      statusFullyPublished = true;
+      LOG_INFO("Retained status/boot updated with valid time + IP");
     }
   }
 }

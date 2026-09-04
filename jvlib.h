@@ -50,7 +50,7 @@
 // Version
 // -----------------------------------------------------------------------------
 #ifndef JVLIB_VERSION
-#define JVLIB_VERSION "2026.09.01c"
+#define JVLIB_VERSION "2026.09.04"
 
 #ifndef JV_ALTITUDE_M
 #define JV_ALTITUDE_M 0.0
