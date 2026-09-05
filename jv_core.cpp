@@ -328,7 +328,7 @@ static void buildDeviceId() {
 // -----------------------------------------------------------------------------
 namespace jv {
 
-void beginWithName(const char* deviceName) {
+void beginWithName(const char* deviceName, const char* sketchVersion) {
   Serial.begin(serialclock);
   delay(1200);
 
@@ -342,10 +342,9 @@ void beginWithName(const char* deviceName) {
     LOG_WARN("me is default \"sensor\" — #define me \"FTV2\" (etc.) in the sketch for clear MQTT topics");
   }
 
-#ifndef mainver
-  #define mainver "0.0.0"
-#endif
-  jv_internal::combinedVersion = String(mainver) + ":" + String(JVLIB_VERSION);
+  // Sketch version from #define mainver (same header-pass trick as me)
+  const char* sv = (sketchVersion && sketchVersion[0]) ? sketchVersion : "0.0.0";
+  jv_internal::combinedVersion = String(sv) + ":" + String(JVLIB_VERSION);
 
   LOG_INFO("Booting %s  %s", jv_internal::hostname.c_str(), jv_internal::combinedVersion.c_str());
 

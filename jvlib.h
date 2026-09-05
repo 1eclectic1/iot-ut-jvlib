@@ -50,7 +50,7 @@
 // Version
 // -----------------------------------------------------------------------------
 #ifndef JVLIB_VERSION
-#define JVLIB_VERSION "2026.09.05b"
+#define JVLIB_VERSION "2026.09.05c"
 
 #ifndef JV_ALTITUDE_M
 #define JV_ALTITUDE_M 0.0
@@ -77,6 +77,9 @@
 #ifndef me
 #define me "sensor"
 #define JV_ME_DEFAULT 1   // sketch did not #define me
+#endif
+#ifndef mainver
+#define mainver "0.0.0"
 #endif
 
 #ifndef LOG_ENABLED
@@ -160,8 +163,8 @@ void jvLog(LogLevel level, const char* file, int line, const char* format, ...);
 namespace jv {
 
   // Call once from setup() — uses #define me from the sketch for id/topics
-  void beginWithName(const char* deviceName);
-  inline void begin() { beginWithName(me); }
+  void beginWithName(const char* deviceName, const char* sketchVersion = nullptr);
+  inline void begin() { beginWithName(me, mainver); }
 
   // Call regularly from loop()
   void loop();
