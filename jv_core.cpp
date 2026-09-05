@@ -35,7 +35,8 @@ namespace jv_internal {
   Timezone     myTZ;
 
   String hostname     = me;
-  String deviceIdStr;
+  String deviceIdStr;   // unique me-MAC
+  String payloadIdStr;  // me if user-defined, else deviceIdStr
   String myIp;
   long   currentRssi  = 0;
   String combinedVersion;
@@ -110,7 +111,7 @@ namespace jv_internal {
   void publishBootRecord() {
     if (!mqtt.connected()) return;
     StaticJsonDocument<192> boot;
-    boot["id"] = deviceIdStr;
+    boot["id"] = payloadIdStr;
     boot["reset"] = resetReasonStr;
     boot["ver"] = combinedVersion;
     if (timeValid()) {
@@ -128,7 +129,7 @@ namespace jv_internal {
     refreshNetworkInfo();
 
     StaticJsonDocument<256> doc;
-    doc["id"]     = deviceIdStr;
+    doc["id"]     = payloadIdStr;
     doc["status"] = online ? "online" : "offline";
     doc["ip"]     = myIp;
     doc["rssi"]   = currentRssi;
@@ -163,7 +164,7 @@ namespace jv_internal {
 
     LOG_INFO("MQTT connecting as %s ...", deviceIdStr.c_str());
 
-    String offlinePayload = "{\"id\":\"" + deviceIdStr + "\",\"status\":\"offline\"}";
+    String offlinePayload = "{\"id\":\"" + payloadIdStr + "\",\"status\":\"offline\"}";
     bool ok = mqtt.connect(
         deviceIdStr.c_str(),
         mqttID,
@@ -192,6 +193,7 @@ namespace jv_internal {
 // Public accessors
 namespace jv {
   const String& deviceId() { return jv_internal::deviceIdStr; }
+  const String& id()       { return jv_internal::payloadIdStr; }
   const String& ip() {
     jv_internal::refreshNetworkInfo();
     return jv_internal::myIp;
@@ -232,7 +234,7 @@ void jvLog(LogLevel level, const char* file, int line, const char* format, ...) 
       && !jv_internal::inMqttLogPublish) {
     jv_internal::inMqttLogPublish = true;
     StaticJsonDocument<384> doc;
-    doc["id"] = jv_internal::deviceIdStr;
+    doc["id"] = jv_internal::payloadIdStr;
     doc["lvl"] = (level == LOG_ERROR) ? "ERROR" :
                  (level == LOG_WARN)  ? "WARN"  :
                  (level == LOG_INFO)  ? "INFO"  : "DEBUG";
@@ -313,6 +315,12 @@ static void buildDeviceId() {
   sprintf(macStr, "%02X%02X%02X%02X%02X%02X",
           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   jv_internal::deviceIdStr = jv_internal::hostname + "-" + macStr;
+  // JSON id: friendly name when sketch set me; full deviceId if still default "sensor"
+  if (jv_internal::hostname != "sensor") {
+    jv_internal::payloadIdStr = jv_internal::hostname;
+  } else {
+    jv_internal::payloadIdStr = jv_internal::deviceIdStr;
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -320,9 +328,19 @@ static void buildDeviceId() {
 // -----------------------------------------------------------------------------
 namespace jv {
 
-void begin() {
+void beginWithName(const char* deviceName) {
   Serial.begin(serialclock);
   delay(1200);
+
+  // Identity from sketch #define me (passed via inline jv::begin() in header)
+  if (deviceName && deviceName[0]) {
+    jv_internal::hostname = deviceName;
+  } else {
+    jv_internal::hostname = "sensor";
+  }
+  if (jv_internal::hostname == "sensor") {
+    LOG_WARN("me is default \"sensor\" — #define me \"FTV2\" (etc.) in the sketch for clear MQTT topics");
+  }
 
 #ifndef mainver
   #define mainver "0.0.0"

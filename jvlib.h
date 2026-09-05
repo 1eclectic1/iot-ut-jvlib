@@ -50,7 +50,7 @@
 // Version
 // -----------------------------------------------------------------------------
 #ifndef JVLIB_VERSION
-#define JVLIB_VERSION "2026.09.04"
+#define JVLIB_VERSION "2026.09.05b"
 
 #ifndef JV_ALTITUDE_M
 #define JV_ALTITUDE_M 0.0
@@ -76,6 +76,7 @@
 
 #ifndef me
 #define me "sensor"
+#define JV_ME_DEFAULT 1   // sketch did not #define me
 #endif
 
 #ifndef LOG_ENABLED
@@ -158,8 +159,9 @@ void jvLog(LogLevel level, const char* file, int line, const char* format, ...);
 // -----------------------------------------------------------------------------
 namespace jv {
 
-  // Call once from setup()
-  void begin();
+  // Call once from setup() — uses #define me from the sketch for id/topics
+  void beginWithName(const char* deviceName);
+  inline void begin() { beginWithName(me); }
 
   // Call regularly from loop()
   void loop();
@@ -182,7 +184,8 @@ namespace jv {
   void publish();
 
   // Accessors
-  const String& deviceId();
+  const String& deviceId();  // unique: me-MAC (topics, MQTT client id)
+  const String& id();        // payload id: #define me if set, else deviceId
   const String& ip();
   long          rssi();
   const String& version();
